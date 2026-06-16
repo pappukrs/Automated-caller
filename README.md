@@ -4,8 +4,8 @@ Inbound AI telecaller. Someone calls a phone number → it listens, responds, an
 
 Built in phases:
 
-- **Phase 0 — Answer a call** ← _you are here_. Pick up, speak a greeting (with recording consent), hang up.
-- Phase 1 — Record the caller's message.
+- Phase 0 — Answer a call. Pick up, speak a greeting (with recording consent), hang up.
+- **Phase 1 — Record the caller's message** ← _you are here_. Greeting → beep → record → save audio + metadata to `recordings/`.
 - Phase 2 — Transcribe speech to text (Deepgram / Sarvam).
 - Phase 3 — Two-way AI conversation (STT → Claude → TTS).
 - Phase 4 — Make it useful (booking, tools, call logs in a DB).
@@ -50,9 +50,16 @@ Copy the `https://....ngrok-free.app` URL it prints.
 
 ### 5. Call the number
 
-You should hear the greeting, then the call ends. Your terminal logs `[call] incoming from ...`.
+You hear the greeting, then a beep. **Speak a message and press `#`** (or stay silent for 10s).
+You then hear "thank you", and the call ends.
 
-That's Phase 0 done — telephony is wired to your server. ✅
+- Your terminal logs `[record] done ...` and `[record] saved recordings/<id>.mp3`.
+- The audio + a `.json` metadata file appear in `recordings/`.
+
+> Downloading the recording needs `PLIVO_AUTH_ID` / `PLIVO_AUTH_TOKEN` in `.env` (Basic auth on the URL).
+> Without them, the call still works and the `RecordUrl` is logged — you just won't get a local copy.
+
+That's Phase 1 done — your telecaller now takes messages. ✅
 
 ---
 

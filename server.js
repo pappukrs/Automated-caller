@@ -2,6 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
+import { transcribeFile } from './stt.js';
 
 const app = express();
 
@@ -28,7 +29,7 @@ const SILENCE_TIMEOUT = process.env.RECORD_TIMEOUT || '10'; // seconds of silenc
 
 // Health check — open this in a browser to confirm the server is up.
 app.get('/', (_req, res) => {
-  res.json({ status: 'ok', phase: 1, message: 'Automated caller is running.' });
+  res.json({ status: 'ok', phase: 2, message: 'Automated caller is running.' });
 });
 
 /**
@@ -101,11 +102,23 @@ async function saveRecording({ RecordUrl, RecordingID, RecordingDuration, From, 
   const buf = Buffer.from(await resp.arrayBuffer());
   const audioPath = path.join(RECORDINGS_DIR, `${RecordingID}.mp3`);
   fs.writeFileSync(audioPath, buf);
+  console.log(`[record] saved ${audioPath} (${buf.length} bytes)`);
 
   const meta = { RecordingID, From, CallUUID, RecordingDuration, RecordUrl, savedAt: new Date().toISOString(), bytes: buf.length };
-  fs.writeFileSync(path.join(RECORDINGS_DIR, `${RecordingID}.json`), JSON.stringify(meta, null, 2));
 
-  console.log(`[record] saved ${audioPath} (${buf.length} bytes)`);
+  // Phase 2: transcribe the message. Don't let an STT failure lose the audio.
+  try {
+    const { text, provider } = await transcribeFile(audioPath);
+    meta.transcript = text;
+    meta.sttProvider = provider;
+    fs.writeFileSync(path.join(RECORDINGS_DIR, `${RecordingID}.txt`), text);
+    console.log(`[stt] (${provider}) ${RecordingID}: ${text || '(empty)'}`);
+  } catch (err) {
+    meta.transcriptError = err.message;
+    console.error(`[stt] transcription failed for ${RecordingID}:`, err.message);
+  }
+
+  fs.writeFileSync(path.join(RECORDINGS_DIR, `${RecordingID}.json`), JSON.stringify(meta, null, 2));
 }
 
 /** Build the public base URL of this server from the incoming request (or PUBLIC_URL override). */
@@ -126,6 +139,6 @@ function escapeXml(s) {
 }
 
 app.listen(PORT, () => {
-  console.log(`Automated caller (Phase 1) listening on http://localhost:${PORT}`);
+  console.log(`Automated caller (Phase 2) listening on http://localhost:${PORT}`);
   console.log(`  Answer URL (give this to Plivo): <your-public-url>/answer`);
 });

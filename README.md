@@ -5,8 +5,8 @@ Inbound AI telecaller. Someone calls a phone number → it listens, responds, an
 Built in phases:
 
 - Phase 0 — Answer a call. Pick up, speak a greeting (with recording consent), hang up.
-- **Phase 1 — Record the caller's message** ← _you are here_. Greeting → beep → record → save audio + metadata to `recordings/`.
-- Phase 2 — Transcribe speech to text (Deepgram / Sarvam).
+- Phase 1 — Record the caller's message. Greeting → beep → record → save audio + metadata to `recordings/`.
+- **Phase 2 — Transcribe speech to text** ← _you are here_. Each saved recording is transcribed (Deepgram or Sarvam) to `<id>.txt`.
 - Phase 3 — Two-way AI conversation (STT → Claude → TTS).
 - Phase 4 — Make it useful (booking, tools, call logs in a DB).
 
@@ -60,6 +60,28 @@ You then hear "thank you", and the call ends.
 > Without them, the call still works and the `RecordUrl` is logged — you just won't get a local copy.
 
 That's Phase 1 done — your telecaller now takes messages. ✅
+
+---
+
+## Phase 2 — transcription
+
+After each recording is saved, it's automatically transcribed to `recordings/<id>.txt`, and the
+text is added to `<id>.json`. Pick a provider in `.env`:
+
+- `STT_PROVIDER=deepgram` + `DEEPGRAM_API_KEY` — good general accuracy, Hindi/English code-switching.
+- `STT_PROVIDER=sarvam` + `SARVAM_API_KEY` — built for Indian languages/accents.
+
+### Test without making a call
+
+Transcribe any local audio file directly:
+
+```bash
+npm run transcribe -- recordings/<some-id>.mp3
+# or any mp3/wav:
+node transcribe.js path/to/audio.mp3
+```
+
+You'll see the transcript printed. This is the quickest way to confirm your STT key/provider works. ✅
 
 ---
 

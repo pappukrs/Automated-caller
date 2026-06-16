@@ -11,7 +11,10 @@
 // NOTE: the live audio path can only be fully validated on a real call. The protocol
 // details (Plivo event names, Deepgram params) are isolated in clearly marked spots.
 import WebSocket from 'ws';
+import { randomUUID } from 'node:crypto';
 import Anthropic from '@anthropic-ai/sdk';
+import { TOOLS, executeTool } from './tools.js';
+import * as store from './store.js';
 
 const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8';
 
@@ -19,9 +22,12 @@ const MODEL = process.env.ANTHROPIC_MODEL || 'claude-opus-4-8';
 // (Thinking is left OFF for latency; we instruct it to answer with only the spoken line.)
 const SYSTEM_PROMPT =
   process.env.AGENT_SYSTEM_PROMPT ||
-  `You are a friendly phone receptionist. You are speaking out loud on a live phone call, ` +
-  `so reply with ONLY the words to be spoken — no markdown, no lists, no stage directions. ` +
-  `Keep replies to one or two short sentences. Ask one question at a time.`;
+  `You are a friendly dental-clinic phone receptionist. You are speaking out loud on a live ` +
+  `phone call, so reply with ONLY the words to be spoken — no markdown, no lists, no stage ` +
+  `directions. Keep replies to one or two short sentences and ask one question at a time. ` +
+  `You can check appointment availability, book appointments, and send an SMS confirmation ` +
+  `using your tools. Always check availability before offering a time, and confirm the ` +
+  `caller's name and the slot before booking.`;
 
 export class VoiceAgent {
   /** @param {WebSocket} plivoWs - the Plivo media-stream socket for this call */
@@ -29,6 +35,9 @@ export class VoiceAgent {
     this.plivo = plivoWs;
     this.anthropic = null; // created lazily on first turn (reads ANTHROPIC_API_KEY)
     this.history = []; // [{role, content}] conversation so far
+    this.callId = randomUUID();
+    this.callerNumber = '';
+    store.startCall(this.callId);
     this.deepgram = null;
     this.speaking = false; // is the bot currently sending TTS audio?
     this.ttsAbort = null; // AbortController for the in-flight TTS request
@@ -47,7 +56,8 @@ export class VoiceAgent {
 
       switch (msg.event) {
         case 'start':
-          console.log('[call] media stream started');
+          this.callerNumber = msg.start?.from || msg.start?.callerNumber || '';
+          console.log(`[call] media stream started (callId ${this.callId})`);
           break;
         case 'media':
           // Plivo sends base64 mu-law in msg.media.payload — forward raw bytes to Deepgram.
@@ -123,16 +133,41 @@ export class VoiceAgent {
     if (!process.env.ANTHROPIC_API_KEY) { console.error('[claude] ANTHROPIC_API_KEY not set — brain disabled'); return; }
     this.anthropic ??= new Anthropic();
     this.history.push({ role: 'user', content: text });
+    store.logCallTurn(this.callId, 'caller', text);
+    this.speaking = true;
 
-    // Stream Claude's reply; flush to TTS sentence-by-sentence to cut latency.
+    try {
+      // Tool-use loop: Claude may call a tool, we run it, then it speaks the result.
+      for (let round = 0; round < 5; round++) {
+        const finalMsg = await this.streamClaudeTurn();
+        this.history.push({ role: 'assistant', content: finalMsg.content });
+
+        if (finalMsg.stop_reason !== 'tool_use') break;
+
+        const results = [];
+        for (const block of finalMsg.content) {
+          if (block.type !== 'tool_use') continue;
+          const out = await executeTool(block.name, block.input, { phone: this.callerNumber });
+          console.log(`[tool] ${block.name}(${JSON.stringify(block.input)}) -> ${out}`);
+          results.push({ type: 'tool_result', tool_use_id: block.id, content: out });
+        }
+        this.history.push({ role: 'user', content: results });
+      }
+    } catch (err) {
+      if (err.name !== 'AbortError') console.error('[claude] error:', err.message);
+    }
+  }
+
+  /** Stream one Claude turn, flushing speech sentence-by-sentence. Returns the final message. */
+  async streamClaudeTurn() {
     let buffer = '';
     let full = '';
-    this.speaking = true;
 
     const stream = this.anthropic.messages.stream({
       model: MODEL,
-      max_tokens: 300,
+      max_tokens: 400,
       system: SYSTEM_PROMPT,
+      tools: TOOLS,
       messages: this.history,
     });
     this.claudeStream = stream;
@@ -140,7 +175,6 @@ export class VoiceAgent {
     stream.on('text', (delta) => {
       buffer += delta;
       full += delta;
-      // Flush each complete sentence as soon as it lands.
       const match = buffer.match(/^(.*?[.!?])\s+(.*)$/s);
       if (match) {
         this.speak(match[1]);
@@ -149,12 +183,13 @@ export class VoiceAgent {
     });
 
     try {
-      await stream.finalMessage();
+      const finalMsg = await stream.finalMessage();
       if (buffer.trim()) this.speak(buffer); // flush remainder
-      if (full.trim()) this.history.push({ role: 'assistant', content: full.trim() });
-      console.log(`[bot] ${full.trim()}`);
-    } catch (err) {
-      if (err.name !== 'AbortError') console.error('[claude] error:', err.message);
+      if (full.trim()) {
+        store.logCallTurn(this.callId, 'bot', full.trim());
+        console.log(`[bot] ${full.trim()}`);
+      }
+      return finalMsg;
     } finally {
       this.claudeStream = null;
     }
@@ -198,6 +233,7 @@ export class VoiceAgent {
   }
 
   cleanup() {
+    store.endCall(this.callId);
     try { this.deepgram?.close(); } catch {}
     try { this.ttsAbort?.abort(); } catch {}
     try { this.claudeStream?.abort?.(); } catch {}

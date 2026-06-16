@@ -7,8 +7,8 @@ Built in phases:
 - Phase 0 — Answer a call. Pick up, speak a greeting (with recording consent), hang up.
 - Phase 1 — Record the caller's message. Greeting → beep → record → save audio + metadata to `recordings/`.
 - Phase 2 — Transcribe speech to text (Deepgram or Sarvam) to `<id>.txt`.
-- **Phase 3 — Two-way AI conversation (real-time)** ← _you are here_. Live `STT → Claude → TTS` over a WebSocket.
-- Phase 4 — Make it useful (booking, tools, call logs in a DB).
+- Phase 3 — Two-way AI conversation (real-time). Live `STT → Claude → TTS` over a WebSocket.
+- **Phase 4 — Make it useful** ← _you are here_. Claude tools (check availability, book, SMS) + saved transcripts/bookings.
 
 Stack: Node.js + Express. Telephony: **Plivo** (India numbers + audio streaming).
 
@@ -118,6 +118,36 @@ Say something — you should hear Claude reply in ElevenLabs' voice within ~1 se
 > ⚠️ The live audio path can only be fully tuned on a real call (latency, turn-taking, the exact
 > Plivo stream wire-format). The protocol bits live in `voice-agent.js`, clearly marked, so they're
 > easy to adjust. Files: `voice-agent.js` (the call pipeline), `server.js` (`/conversation` + `/ws`).
+
+---
+
+## Phase 4 — tools + persistence
+
+The bot can now actually *do things*. Claude is given three tools (`tools.js`):
+
+- `check_availability(date)` — free appointment slots for a date.
+- `book_appointment(name, phone, date, time, reason)` — books a slot.
+- `send_sms_confirmation(phone, message)` — texts the caller (via Plivo SMS).
+
+During a call Claude decides when to call them (e.g. "Do you have anything Tuesday?" →
+`check_availability` → offers a slot → `book_appointment` → `send_sms_confirmation`).
+
+Everything is persisted to a local `data/` folder (no DB server needed — swap `store.js`
+for SQLite/Postgres later):
+
+- `data/appointments.json` — all bookings.
+- `data/calls/<id>.json` — full transcript of every call (each caller/bot turn, timestamped).
+
+### Set up
+
+- SMS confirmations need `PLIVO_AUTH_ID`, `PLIVO_AUTH_TOKEN`, and `PLIVO_NUMBER` in `.env`.
+  Without them the bot still books — it just skips the SMS.
+- Clinic hours/slots are defined at the top of `store.js`; edit to taste.
+
+### Try it
+
+On a live `/conversation` call, ask to book an appointment. Then check `data/appointments.json`
+and `data/calls/` — you'll see the booking and the full transcript. ✅
 
 ---
 

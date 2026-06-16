@@ -32,7 +32,7 @@ const SILENCE_TIMEOUT = process.env.RECORD_TIMEOUT || '10'; // seconds of silenc
 
 // Health check — open this in a browser to confirm the server is up.
 app.get('/', (_req, res) => {
-  res.json({ status: 'ok', phase: 3, message: 'Automated caller is running.' });
+  res.json({ status: 'ok', phase: 4, message: 'Automated caller is running.' });
 });
 
 /**
@@ -166,7 +166,7 @@ wss.on('connection', (ws) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`Automated caller (Phase 3) listening on http://localhost:${PORT}`);
+  console.log(`Automated caller (Phase 4) listening on http://localhost:${PORT}`);
   console.log(`  Record flow  Answer URL:  <your-public-url>/answer`);
   console.log(`  AI conversation Answer URL: <your-public-url>/conversation`);
 });

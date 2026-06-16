@@ -2,7 +2,10 @@ import 'dotenv/config';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
+import http from 'node:http';
+import { WebSocketServer } from 'ws';
 import { transcribeFile } from './stt.js';
+import { VoiceAgent } from './voice-agent.js';
 
 const app = express();
 
@@ -29,7 +32,7 @@ const SILENCE_TIMEOUT = process.env.RECORD_TIMEOUT || '10'; // seconds of silenc
 
 // Health check — open this in a browser to confirm the server is up.
 app.get('/', (_req, res) => {
-  res.json({ status: 'ok', phase: 2, message: 'Automated caller is running.' });
+  res.json({ status: 'ok', phase: 3, message: 'Automated caller is running.' });
 });
 
 /**
@@ -79,6 +82,21 @@ app.post('/recording', async (req, res) => {
       console.error(`[record] save failed for ${RecordingID}:`, err.message);
     }
   }
+});
+
+/**
+ * Phase 3 — AI conversation. Instead of recording, stream the call audio over a
+ * WebSocket so we can run live STT -> Claude -> TTS. Plivo connects to /ws.
+ */
+app.post('/conversation', (req, res) => {
+  console.log(`[call] incoming from ${req.body.From || 'unknown'} -> AI conversation`);
+  const wsUrl = `${baseUrl(req).replace(/^http/, 'ws')}/ws`;
+  const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Speak voice="${VOICE}" language="en-IN">Hello! This call is recorded. How can I help you today?</Speak>
+  <Stream bidirectional="true" keepCallAlive="true" contentType="audio/x-mulaw;rate=8000" audioTrack="inbound">${escapeXml(wsUrl)}</Stream>
+</Response>`;
+  res.set('Content-Type', 'text/xml').send(xml);
 });
 
 // Plivo posts here after the call ends (optional, useful for logging).
@@ -138,7 +156,17 @@ function escapeXml(s) {
     .replace(/'/g, '&apos;');
 }
 
-app.listen(PORT, () => {
-  console.log(`Automated caller (Phase 2) listening on http://localhost:${PORT}`);
-  console.log(`  Answer URL (give this to Plivo): <your-public-url>/answer`);
+// HTTP + WebSocket on the same server. Plivo's <Stream> connects to /ws.
+const server = http.createServer(app);
+const wss = new WebSocketServer({ server, path: '/ws' });
+
+wss.on('connection', (ws) => {
+  console.log('[ws] Plivo media stream connected');
+  new VoiceAgent(ws); // drives the whole call; cleans itself up on close
+});
+
+server.listen(PORT, () => {
+  console.log(`Automated caller (Phase 3) listening on http://localhost:${PORT}`);
+  console.log(`  Record flow  Answer URL:  <your-public-url>/answer`);
+  console.log(`  AI conversation Answer URL: <your-public-url>/conversation`);
 });

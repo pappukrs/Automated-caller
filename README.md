@@ -6,8 +6,8 @@ Built in phases:
 
 - Phase 0 — Answer a call. Pick up, speak a greeting (with recording consent), hang up.
 - Phase 1 — Record the caller's message. Greeting → beep → record → save audio + metadata to `recordings/`.
-- **Phase 2 — Transcribe speech to text** ← _you are here_. Each saved recording is transcribed (Deepgram or Sarvam) to `<id>.txt`.
-- Phase 3 — Two-way AI conversation (STT → Claude → TTS).
+- Phase 2 — Transcribe speech to text (Deepgram or Sarvam) to `<id>.txt`.
+- **Phase 3 — Two-way AI conversation (real-time)** ← _you are here_. Live `STT → Claude → TTS` over a WebSocket.
 - Phase 4 — Make it useful (booking, tools, call logs in a DB).
 
 Stack: Node.js + Express. Telephony: **Plivo** (India numbers + audio streaming).
@@ -82,6 +82,42 @@ node transcribe.js path/to/audio.mp3
 ```
 
 You'll see the transcript printed. This is the quickest way to confirm your STT key/provider works. ✅
+
+---
+
+## Phase 3 — live AI conversation
+
+Now the caller has a real two-way conversation. Instead of recording, Plivo streams the call
+audio over a WebSocket and the server runs a live loop:
+
+```
+caller speaks → Deepgram (live STT) → Claude (streaming) → ElevenLabs (streaming TTS) → caller hears reply
+```
+
+Everything is μ-law 8 kHz (the telephony codec) end-to-end, so no audio transcoding is needed.
+Barge-in is handled: if the caller talks while the bot is speaking, the bot stops.
+
+### Set up
+
+Add to `.env`:
+
+- `ANTHROPIC_API_KEY` — Claude, the brain (https://console.anthropic.com). Model defaults to `claude-opus-4-8`; set `ANTHROPIC_MODEL=claude-haiku-4-5` for lower latency.
+- `ELEVENLABS_API_KEY` + `ELEVENLABS_VOICE_ID` — text-to-speech (https://elevenlabs.io).
+- `DEEPGRAM_API_KEY` — reused from Phase 2 for live STT.
+- `AGENT_SYSTEM_PROMPT` — optional; defines the bot's persona.
+
+### Point Plivo at the conversation flow
+
+Change your Plivo Application's **Answer URL** to `https://<your-public-url>/conversation`
+(the record flow stays available at `/answer`). Plivo's `<Stream>` connects back to `wss://<your-public-url>/ws`.
+
+### Call the number
+
+Say something — you should hear Claude reply in ElevenLabs' voice within ~1 second.
+
+> ⚠️ The live audio path can only be fully tuned on a real call (latency, turn-taking, the exact
+> Plivo stream wire-format). The protocol bits live in `voice-agent.js`, clearly marked, so they're
+> easy to adjust. Files: `voice-agent.js` (the call pipeline), `server.js` (`/conversation` + `/ws`).
 
 ---
 
